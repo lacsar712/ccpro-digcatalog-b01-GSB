@@ -82,12 +82,14 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import api from '../api/http'
 
+const route = useRoute()
 const list = ref([])
 const sites = ref([])
-const filterSiteId = ref('')
+const filterSiteId = ref(route.query.siteId ? String(route.query.siteId) : '')
 const error = ref('')
 const formError = ref('')
 const showModal = ref(false)
@@ -174,6 +176,15 @@ async function remove(item) {
     alert(e.response?.data?.error || '删除失败')
   }
 }
+
+// 概览页「按工地对比」点击行会带 ?siteId= 跳转过来；路由参数变化时同步筛选
+watch(
+  () => route.query.siteId,
+  (v) => {
+    filterSiteId.value = v ? String(v) : ''
+    load()
+  }
+)
 
 onMounted(async () => {
   await loadSites()

@@ -412,6 +412,9 @@ func (h *Handler) DeleteFind(c *gin.Context) {
 
 // ---------- Overview ----------
 
+// utcPlus8 东八区固定偏移。自然日口径只认 UTC+8，不随服务器/容器本地时区变化。
+var utcPlus8 = time.FixedZone("UTC+8", 8*60*60)
+
 func (h *Handler) Overview(c *gin.Context) {
 	var siteCount, unitCount, findCount int64
 	h.DB.Model(&models.Site{}).Count(&siteCount)
@@ -428,10 +431,41 @@ func (h *Handler) Overview(c *gin.Context) {
 		Group("artifact_type").
 		Scan(&byType)
 
+	// 近 7 个东八区自然日（含今天）新增文物数，按 created_at 计。
+	// 窗口为 [今天-6天 00:00, 明天 00:00)（UTC+8）。
+	now := time.Now().In(utcPlus8)
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, utcPlus8)
+	windowStart := dayStart.AddDate(0, 0, -6)
+	windowEnd := dayStart.AddDate(0, 0, 1)
+	// created_at 由本进程以 time.Now() 写入（本地时区墙钟），查询参数先换算到
+	// time.Local，保证无论驱动如何序列化 time.Time，比较的都是同一绝对时刻。
+	var last7DaysNewFinds int64
+	h.DB.Model(&models.Find{}).
+		Where("created_at >= ? AND created_at < ?", windowStart.In(time.Local), windowEnd.In(time.Local)).
+		Count(&last7DaysNewFinds)
+
+	type siteStat struct {
+		SiteID    uint   `json:"siteId"`
+		SiteName  string `json:"siteName"`
+		FindCount int64  `json:"findCount"`
+		UnitCount int64  `json:"unitCount"`
+	}
+	bySite := make([]siteStat, 0)
+	h.DB.Model(&models.Site{}).
+		Select("sites.id AS site_id, sites.name AS site_name, " +
+			"COUNT(finds.id) AS find_count, COUNT(DISTINCT units.id) AS unit_count").
+		Joins("LEFT JOIN units ON units.site_id = sites.id AND units.deleted_at IS NULL").
+		Joins("LEFT JOIN finds ON finds.unit_id = units.id AND finds.deleted_at IS NULL").
+		Group("sites.id, sites.name").
+		Order("find_count DESC, sites.id ASC").
+		Scan(&bySite)
+
 	c.JSON(http.StatusOK, gin.H{
-		"siteCount": siteCount,
-		"unitCount": unitCount,
-		"findCount": findCount,
-		"byType":    byType,
+		"siteCount":         siteCount,
+		"unitCount":         unitCount,
+		"findCount":         findCount,
+		"last7DaysNewFinds": last7DaysNewFinds,
+		"byType":            byType,
+		"bySite":            bySite,
 	})
 }
