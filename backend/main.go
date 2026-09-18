@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"time"
+	_ "time/tzdata" // 内嵌时区数据库，保证 DSN 的 loc=Asia/Shanghai 不依赖系统 tzdata
 
 	"digcatalog/internal/config"
 	"digcatalog/internal/handlers"

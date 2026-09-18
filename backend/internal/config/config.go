@@ -28,7 +28,10 @@ func Load() *Config {
 }
 
 func (c *Config) DSN() string {
-	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local",
+	// loc 显式固定为 Asia/Shanghai：MySQL DATETIME 不含时区，
+	// GORM 读写 created_at 等时间字段时一律按东八区解释，
+	// 不依赖后端容器/宿主机的 TZ 设置（运行镜像需含 tzdata）。
+	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Asia%%2FShanghai",
 		c.DBUser, c.DBPassword, c.DBHost, c.DBPort, c.DBName)
 }
 

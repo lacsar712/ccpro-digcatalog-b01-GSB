@@ -412,6 +412,26 @@ func (h *Handler) DeleteFind(c *gin.Context) {
 
 // ---------- Overview ----------
 
+// cstZone 固定东八区（UTC+8），不依赖运行环境或数据库时区。
+// 概览中“近 7 日”一律按东八区自然日界定。
+var cstZone = time.FixedZone("CST", 8*60*60)
+
+// last7DaysWindow 返回东八区“近 7 日”半开区间 [start, end)：
+// 以 now 所在的东八区自然日为最后一天，start = 当天00:00−6天，
+// end = 次日00:00；长度恒为 7×24h，不受宿主机时区/夏令时影响。
+func last7DaysWindow(now time.Time) (start, end time.Time) {
+	n := now.In(cstZone)
+	todayStart := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, cstZone)
+	return todayStart.AddDate(0, 0, -6), todayStart.AddDate(0, 0, 1)
+}
+
+type overviewSiteStat struct {
+	SiteID    uint   `json:"siteId"`
+	SiteName  string `json:"siteName"`
+	FindCount int64  `json:"findCount"`
+	UnitCount int64  `json:"unitCount"`
+}
+
 func (h *Handler) Overview(c *gin.Context) {
 	var siteCount, unitCount, findCount int64
 	h.DB.Model(&models.Site{}).Count(&siteCount)
@@ -419,19 +439,82 @@ func (h *Handler) Overview(c *gin.Context) {
 	h.DB.Model(&models.Find{}).Count(&findCount)
 
 	type typeStat struct {
-		ArtifactType string `json:"artifactType"`
+		ArtifactType string `json:"artifactType" gorm:"column:artifact_type"`
 		Count        int64  `json:"count"`
 	}
 	var byType []typeStat
 	h.DB.Model(&models.Find{}).
-		Select("artifact_type as artifact_type, count(*) as count").
+		Select("artifact_type, count(*) as count").
 		Group("artifact_type").
 		Scan(&byType)
 
+	// 近 7 日新增文物：以东八区“今天”为窗口右端，统计 [今天-6天 00:00, 明天 00:00)
+	// 共 7 个东八区自然日内 created_at 落库的文物。
+	windowStart, windowEnd := last7DaysWindow(time.Now())
+	var last7DaysNewFinds int64
+	h.DB.Model(&models.Find{}).
+		Where("created_at >= ? AND created_at < ?", windowStart, windowEnd).
+		Count(&last7DaysNewFinds)
+
+	// 按工地统计：以 sites 表为主，分别聚合文物与探方数后在应用层合并，
+	// 保证没有探方/文物的工地也会以 0 出现在列表中。
+	var sites []models.Site
+	if err := h.DB.Order("id asc").Find(&sites).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	bySite := make([]overviewSiteStat, 0, len(sites))
+	statsBySite := make(map[uint]*overviewSiteStat, len(sites))
+	for _, s := range sites {
+		bySite = append(bySite, overviewSiteStat{
+			SiteID:   s.ID,
+			SiteName: s.Name,
+		})
+		statsBySite[s.ID] = &bySite[len(bySite)-1]
+	}
+
+	type unitCountRow struct {
+		SiteID    uint
+		UnitCount int64
+	}
+	var unitRows []unitCountRow
+	h.DB.Model(&models.Unit{}).
+		Select("site_id, count(*) as unit_count").
+		Group("site_id").
+		Scan(&unitRows)
+	for _, r := range unitRows {
+		if st, ok := statsBySite[r.SiteID]; ok {
+			st.UnitCount = r.UnitCount
+		}
+	}
+
+	type findCountRow struct {
+		SiteID    uint
+		FindCount int64
+	}
+	var findRows []findCountRow
+	h.DB.Model(&models.Find{}).
+		Select("units.site_id as site_id, count(*) as find_count").
+		Joins("JOIN units ON units.id = finds.unit_id AND units.deleted_at IS NULL").
+		Group("units.site_id").
+		Scan(&findRows)
+	for _, r := range findRows {
+		if st, ok := statsBySite[r.SiteID]; ok {
+			st.FindCount = r.FindCount
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"siteCount": siteCount,
-		"unitCount": unitCount,
-		"findCount": findCount,
-		"byType":    byType,
+		"siteCount":         siteCount,
+		"unitCount":         unitCount,
+		"findCount":         findCount,
+		"byType":            byType,
+		"last7DaysNewFinds": last7DaysNewFinds,
+		"bySite":            bySite,
+		"last7DaysRange": gin.H{
+			// 回传东八区窗口边界，便于前端展示统计口径。
+			"start": windowStart.Format("2006-01-02"),
+			"end":   windowEnd.AddDate(0, 0, -1).Format("2006-01-02"),
+		},
 	})
 }

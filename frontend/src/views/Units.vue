@@ -82,12 +82,15 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import api from '../api/http'
 
+const route = useRoute()
 const list = ref([])
 const sites = ref([])
-const filterSiteId = ref('')
+// 支持从概览“按工地对比”跳转：/units?siteId=12
+const filterSiteId = ref(route.query.siteId ? String(route.query.siteId) : '')
 const error = ref('')
 const formError = ref('')
 const showModal = ref(false)
@@ -179,4 +182,15 @@ onMounted(async () => {
   await loadSites()
   await load()
 })
+
+watch(
+  () => route.query.siteId,
+  async (val) => {
+    const next = val ? String(val) : ''
+    if (next !== filterSiteId.value) {
+      filterSiteId.value = next
+      await load()
+    }
+  }
+)
 </script>

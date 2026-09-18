@@ -20,7 +20,12 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-for="item in list" :key="item.id">
+          <tr
+            v-for="item in list"
+            :key="item.id"
+            :class="{ focused: item.id === focusedId }"
+            :ref="(el) => bindRow(el, item.id)"
+          >
             <td>{{ item.name }}</td>
             <td><span class="tag">{{ item.period }}</span></td>
             <td>{{ item.latitude }}, {{ item.longitude }}</td>
@@ -79,9 +84,21 @@
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import api from '../api/http'
 
+const route = useRoute()
 const list = ref([])
+// 支持从概览跳转定位：/sites?focusId=12
+const focusedId = ref(route.query.focusId ? Number(route.query.focusId) : null)
+let didScroll = false
+
+function bindRow(el, id) {
+  if (el && id === focusedId.value && !didScroll) {
+    didScroll = true
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }
+}
 const error = ref('')
 const formError = ref('')
 const showModal = ref(false)
@@ -150,3 +167,13 @@ async function remove(item) {
 
 onMounted(load)
 </script>
+
+<style scoped>
+tr.focused {
+  background: var(--surface-hover, rgba(0, 0, 0, 0.05));
+}
+
+tr.focused td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+</style>
